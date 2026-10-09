@@ -560,7 +560,7 @@
     let results = [];
     let cursor = undefined;
     let pageCount = 0;
-    const MAX_PAGES = 120; // límite de seguridad para evitar loops infinitos
+    const MAX_PAGES = 200; // 200 páginas x 100 registros = 20.000 registros máximo
 
     do {
       const body = { page_size: 100 };
@@ -602,6 +602,7 @@
 
     } while (cursor);
 
+    // Sin filtro de duplicados por ahora
     return results.sort((a, b) => {
       const na = parseInt(a.code, 10), nb = parseInt(b.code, 10);
       if (!isNaN(na) && !isNaN(nb)) return na - nb;
