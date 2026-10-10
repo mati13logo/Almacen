@@ -568,7 +568,7 @@
 
     while (true) {
       const res = await fetch(
-        `${SUPABASE_URL}/articulos?select=codigo,descripcion1,descripcion2&order=codigo.asc&limit=${limit}&offset=${offset}`,
+        `${SUPABASE_URL}/articulos?select=CODIGO,DESCRIPCION1,DESCRIPCION2&order=CODIGO.asc&limit=${limit}&offset=${offset}`,
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY } }
       );
       if (!res.ok) throw new Error('Error Supabase ' + res.status);
@@ -576,8 +576,8 @@
       if (!rows.length) break;
 
       for (const row of rows) {
-        const desc = [row.descripcion1, row.descripcion2].filter(d => d && d.trim()).join(' — ');
-        if (row.codigo) results.push({ code: String(row.codigo).trim(), desc });
+        const desc = [row.DESCRIPCION1, row.DESCRIPCION2].filter(d => d && d.trim()).join(' — ');
+        if (row.CODIGO) results.push({ code: String(row.CODIGO).trim(), desc });
       }
 
       if (rows.length < limit) break;
