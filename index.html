@@ -540,78 +540,50 @@
   let filtered = [];
   let editingIndex = -1;
   const PHOTOS_PATH = 'G:/MTTL/CodigosDeAlmacen/';
-  const NOTION_TOKEN = 'ntn_k74277311783zbfeZduFzL9PjyOeabWl1SWLcnnbhP20eu';
-  const NOTION_DB = '3f21baba2eea802ba0d9d12f0d63b3fd';
+  const SUPABASE_URL = 'https://fameghmtdbearoiqvmbs.supabase.co/rest/v1';
+  const SUPABASE_KEY = 'sb_publishable_X6O9Sztis-Sjx0w9aMkgXQ_75sGuE7e';
   const R2_BASE = 'https://pub-6bbb41d0755845f5bd62284dcf8218e7.r2.dev';
   const photoCache = {};
 
-  // ── AUTO-CARGA DESDE NOTION AL INICIAR ────────────────────
+  // ── AUTO-CARGA DESDE SUPABASE AL INICIAR ──────────────────
   window.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('load-section').innerHTML = `
-      <p style="color:var(--text-muted); font-size:0.9rem;">⏳ Cargando datos desde Notion...</p>`;
+      <p style="color:var(--text-muted); font-size:0.9rem;">⏳ Cargando datos...</p>`;
     try {
-      data = await loadFromNotion();
+      data = await loadFromSupabase();
       filtered = [...data];
       showApp();
     } catch (e) {
       document.getElementById('load-section').innerHTML = `
-        <p style="color:var(--danger); font-size:0.9rem; margin-bottom:16px;">⚠️ No se pudo cargar desde Notion. Cargá el CSV manualmente.</p>
-        <label class="btn-file" for="file-input">📂 Cargar CSV</label>
+        <p style="color:var(--danger); font-size:0.9rem; margin-bottom:16px;">⚠️ No se pudo cargar los datos.</p>
+        <label class="btn-file" for="file-input">📂 Cargar CSV manualmente</label>
         <input type="file" id="file-input" accept=".csv,.txt" onchange="handleFileInput(event)">`;
     }
   });
 
-  async function loadFromNotion() {
+  async function loadFromSupabase() {
     let results = [];
-    let cursor = undefined;
-    let pageCount = 0;
-    const MAX_PAGES = 200; // 200 páginas x 100 registros = 20.000 registros máximo
+    let offset = 0;
+    const limit = 1000;
 
-    do {
-      const body = { page_size: 100 };
-      if (cursor) body.start_cursor = cursor;
+    while (true) {
+      const res = await fetch(
+        `${SUPABASE_URL}/articulos?select=codigo,descripcion1,descripcion2&order=codigo.asc&limit=${limit}&offset=${offset}`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY } }
+      );
+      if (!res.ok) throw new Error('Error Supabase ' + res.status);
+      const rows = await res.json();
+      if (!rows.length) break;
 
-      let res, json;
-      for (let intento = 0; intento < 3; intento++) {
-        res = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB}/query`, {
-          method: 'POST',
-          headers: {
-            'Authorization': 'Bearer ' + NOTION_TOKEN,
-            'Notion-Version': '2022-06-28',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(body)
-        });
-        if (res.ok) break;
-        await new Promise(r => setTimeout(r, 1000 * (intento + 1))); // esperar antes de reintentar
-      }
-      if (!res.ok) throw new Error('Error Notion ' + res.status);
-      json = await res.json();
-      if (!json.results) throw new Error('Respuesta inválida de Notion');
-
-      for (const page of json.results) {
-        const props = page.properties;
-        // CODIGO es el campo numérico específico, no TTL ni IDarticulo
-        const codeVal = getNotionProp(props, ['CODIGO']);
-        // Descripción viene de DESCRIPCION1 y/o DESCRIPCION2
-        const desc1 = getNotionProp(props, ['DESCRIPCION1']);
-        const desc2 = getNotionProp(props, ['DESCRIPCION2']);
-        const descVal = [desc1, desc2].filter(d => d && d.trim()).join(' — ');
-        if (codeVal) results.push({ code: String(codeVal).trim(), desc: descVal || '' });
+      for (const row of rows) {
+        const desc = [row.descripcion1, row.descripcion2].filter(d => d && d.trim()).join(' — ');
+        if (row.codigo) results.push({ code: String(row.codigo).trim(), desc });
       }
 
-      // Actualizar contador mientras carga
-      document.getElementById('load-section').innerHTML = `
-        <p style="color:var(--text-muted); font-size:0.9rem;">⏳ Cargando datos... ${results.length} repuestos</p>`;
+      if (rows.length < limit) break;
+      offset += limit;
+    }
 
-      cursor = (json.has_more && json.next_cursor) ? json.next_cursor : null;
-      pageCount++;
-
-      if (pageCount >= MAX_PAGES) break; // cortar si algo sale mal
-
-    } while (cursor);
-
-    // Sin filtro de duplicados por ahora
     return results.sort((a, b) => {
       const na = parseInt(a.code, 10), nb = parseInt(b.code, 10);
       if (!isNaN(na) && !isNaN(nb)) return na - nb;
