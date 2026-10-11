@@ -492,16 +492,24 @@
     <h2 id="modal-title">Agregar repuesto</h2>
     <div class="field">
       <label>Código</label>
-      <input type="text" id="modal-code" class="code-input" placeholder="Ej: 30.000.115">
+      <input type="text" id="modal-code" class="code-input" placeholder="Ej: 64300235">
     </div>
     <div class="field">
-      <label>Descripción</label>
-      <textarea id="modal-desc" placeholder="Ej: Pie de bomba Jabsco 700"></textarea>
-      <div class="error-msg" id="modal-error"></div>
+      <label>Descripción 1 <span style="color:var(--danger)">*</span></label>
+      <textarea id="modal-desc1" placeholder="Ej: ALP.0718.004.544 Correa dentada" rows="2"></textarea>
     </div>
+    <div class="field">
+      <label>Descripción 2 <span style="color:var(--text-muted); font-size:0.75rem;">(opcional)</span></label>
+      <textarea id="modal-desc2" placeholder="Ej: Para encoder brazo pescador" rows="2"></textarea>
+    </div>
+    <div class="field">
+      <label>Foto <span style="color:var(--text-muted); font-size:0.75rem;">(opcional)</span></label>
+      <input type="file" id="modal-photo" accept="image/*" style="width:100%; font-size:0.9rem; padding:8px 0;">
+    </div>
+    <div class="error-msg" id="modal-error"></div>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
-      <button class="btn-save" onclick="saveItem()">Guardar</button>
+      <button class="btn-save" id="btn-save" onclick="saveItem()">Guardar</button>
     </div>
   </div>
 </div>
@@ -695,7 +703,7 @@
   }
 
   // ── LOGIN ──────────────────────────────────────────────────
-  const LOGIN_PASS = '1234';
+  const LOGIN_PASS = 'Passparaeditar';
   let isLoggedIn = false;
 
   function toggleLogin() {
@@ -817,16 +825,30 @@
       renderPhotoUrl(photoCache[code], container, code);
       return;
     }
-    // Probar extensiones en R2
     const extensions = ['.jpg', '.jpeg', '.JPG', '.JPEG', '.png'];
     let found = null;
+
+    // Buscar primero en Supabase Storage (fotos nuevas)
+    const supabaseStorageBase = `${SUPABASE_URL.replace('/rest/v1', '')}/storage/v1/object/public/fotos`;
     for (const ext of extensions) {
-      const url = `${R2_BASE}/${code}${ext}`;
+      const url = `${supabaseStorageBase}/${code}${ext}`;
       try {
         const res = await fetch(url, { method: 'HEAD' });
         if (res.ok) { found = url; break; }
       } catch(e) {}
     }
+
+    // Si no está en Supabase, buscar en R2 (fotos existentes)
+    if (!found) {
+      for (const ext of extensions) {
+        const url = `${R2_BASE}/${code}${ext}`;
+        try {
+          const res = await fetch(url, { method: 'HEAD' });
+          if (res.ok) { found = url; break; }
+        } catch(e) {}
+      }
+    }
+
     photoCache[code] = found;
     renderPhotoUrl(found, container, code);
   }
@@ -867,7 +889,9 @@
     editingIndex = -1;
     document.getElementById('modal-title').textContent = 'Agregar repuesto';
     document.getElementById('modal-code').value = '';
-    document.getElementById('modal-desc').value = '';
+    document.getElementById('modal-desc1').value = '';
+    document.getElementById('modal-desc2').value = '';
+    document.getElementById('modal-photo').value = '';
     document.getElementById('modal-error').style.display = 'none';
     document.getElementById('modal').classList.add('open');
     document.body.classList.add('modal-open');
@@ -877,28 +901,34 @@
   // ── EDITAR ─────────────────────────────────────────────────
   function openEdit(idx) {
     editingIndex = idx;
+    const r = data[idx];
+    const parts = r.desc.split(' — ');
     document.getElementById('modal-title').textContent = 'Editar repuesto';
-    document.getElementById('modal-code').value = data[idx].code;
-    document.getElementById('modal-desc').value = data[idx].desc;
+    document.getElementById('modal-code').value = r.code;
+    document.getElementById('modal-desc1').value = parts[0] || '';
+    document.getElementById('modal-desc2').value = parts[1] || '';
+    document.getElementById('modal-photo').value = '';
     document.getElementById('modal-error').style.display = 'none';
     document.getElementById('modal').classList.add('open');
     document.body.classList.add('modal-open');
-    setTimeout(() => document.getElementById('modal-desc').focus(), 50);
+    setTimeout(() => document.getElementById('modal-desc1').focus(), 50);
   }
 
   // ── GUARDAR ────────────────────────────────────────────────
-  function saveItem() {
+  async function saveItem() {
     const code = document.getElementById('modal-code').value.trim();
-    const desc = document.getElementById('modal-desc').value.trim();
+    const desc1 = document.getElementById('modal-desc1').value.trim();
+    const desc2 = document.getElementById('modal-desc2').value.trim();
+    const photoFile = document.getElementById('modal-photo').files[0];
     const errEl = document.getElementById('modal-error');
+    const btnSave = document.getElementById('btn-save');
 
-    if (!code || !desc) {
+    if (!code || !desc1) {
       errEl.textContent = 'Completá el código y la descripción.';
       errEl.style.display = 'block';
       return;
     }
 
-    // Verificar código duplicado (excepto al editar el mismo)
     const duplicate = data.findIndex((r, i) => r.code === code && i !== editingIndex);
     if (duplicate !== -1) {
       errEl.textContent = `El código ${code} ya existe.`;
@@ -906,25 +936,102 @@
       return;
     }
 
-    if (editingIndex === -1) {
-      data.push({ code, desc });
-      showToast('Repuesto agregado');
-    } else {
-      data[editingIndex] = { code, desc };
-      showToast('Cambios guardados');
-    }
+    btnSave.textContent = 'Guardando...';
+    btnSave.disabled = true;
 
-    doSearch();
-    closeModal();
+    try {
+      // Subir foto si se seleccionó
+      if (photoFile) {
+        const ext = photoFile.name.split('.').pop();
+        const fileName = `${code}.${ext}`;
+        const uploadRes = await fetch(
+          `${SUPABASE_URL.replace('/rest/v1', '')}/storage/v1/object/fotos/${fileName}`,
+          {
+            method: 'POST',
+            headers: {
+              'apikey': SUPABASE_KEY,
+              'Authorization': 'Bearer ' + SUPABASE_KEY,
+              'Content-Type': photoFile.type,
+              'x-upsert': 'true'
+            },
+            body: photoFile
+          }
+        );
+        if (uploadRes.ok) {
+          photoCache[code] = `${SUPABASE_URL.replace('/rest/v1', '')}/storage/v1/object/public/fotos/${fileName}`;
+        }
+      }
+
+      const desc = [desc1, desc2].filter(d => d).join(' — ');
+
+      if (editingIndex === -1) {
+        // Insertar en Supabase
+        const res = await fetch(`${SUPABASE_URL}/articulos`, {
+          method: 'POST',
+          headers: {
+            'apikey': SUPABASE_KEY,
+            'Authorization': 'Bearer ' + SUPABASE_KEY,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify({ CODIGO: code, DESCRIPCION1: desc1, DESCRIPCION2: desc2 || null })
+        });
+        if (!res.ok) throw new Error('Error al agregar');
+        data.push({ code, desc });
+        data.sort((a, b) => {
+          const na = parseInt(a.code, 10), nb = parseInt(b.code, 10);
+          if (!isNaN(na) && !isNaN(nb)) return na - nb;
+          return a.code.localeCompare(b.code);
+        });
+        showToast('Repuesto agregado');
+      } else {
+        // Actualizar en Supabase
+        const oldCode = data[editingIndex].code;
+        const res = await fetch(`${SUPABASE_URL}/articulos?CODIGO=eq.${encodeURIComponent(oldCode)}`, {
+          method: 'PATCH',
+          headers: {
+            'apikey': SUPABASE_KEY,
+            'Authorization': 'Bearer ' + SUPABASE_KEY,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify({ CODIGO: code, DESCRIPCION1: desc1, DESCRIPCION2: desc2 || null })
+        });
+        if (!res.ok) throw new Error('Error al actualizar');
+        data[editingIndex] = { code, desc };
+        showToast('Cambios guardados');
+      }
+
+      doSearch();
+      closeModal();
+    } catch(e) {
+      errEl.textContent = 'Error al guardar: ' + e.message;
+      errEl.style.display = 'block';
+    } finally {
+      btnSave.textContent = 'Guardar';
+      btnSave.disabled = false;
+    }
   }
 
   // ── ELIMINAR ───────────────────────────────────────────────
-  function deleteItem(idx) {
+  async function deleteItem(idx) {
     const r = data[idx];
     if (!confirm(`¿Eliminar "${r.code} – ${r.desc}"?`)) return;
-    data.splice(idx, 1);
-    doSearch();
-    showToast('Repuesto eliminado');
+    try {
+      const res = await fetch(`${SUPABASE_URL}/articulos?CODIGO=eq.${encodeURIComponent(r.code)}`, {
+        method: 'DELETE',
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': 'Bearer ' + SUPABASE_KEY
+        }
+      });
+      if (!res.ok) throw new Error('Error al eliminar');
+      data.splice(idx, 1);
+      doSearch();
+      showToast('Repuesto eliminado');
+    } catch(e) {
+      showToast('Error al eliminar');
+    }
   }
 
   // ── MODAL ──────────────────────────────────────────────────
